@@ -1,0 +1,152 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>布丁幸福集點卡｜管理</title><style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#68482f;background:#fff7e7}*{box-sizing:border-box}body{margin:0}.wrap{max-width:520px;margin:auto;padding:22px 16px 50px}h1{font-size:27px;margin:5px 0}.sub{color:#997a58}.card{background:#fff;border:2px solid #f2dbad;border-radius:24px;padding:20px;margin:16px 0;box-shadow:0 6px 0 #f8e7c7}.mascot{font-size:68px;text-align:center}.dots{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0}.dot{aspect-ratio:1;border-radius:50%;background:#fff0d4;display:grid;place-items:center;font-size:24px;border:2px dashed #e4cba5}.dot.on{background:#ffd35d;border:2px solid #d8a545}button{border:0;background:#eebd53;color:#62401f;border-radius:14px;padding:12px 16px;font-weight:700;font-size:15px;cursor:pointer}button.alt{background:#f6e9d3}button.danger{background:#f9ded6}button:disabled{opacity:.4}input:not([type="checkbox"]),textarea{width:100%;padding:12px;border:1px solid #d9c7a9;border-radius:12px;font:inherit;margin:6px 0 12px}label{font-size:14px;font-weight:650}.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1}.entry{border-bottom:1px solid #eee1cf;padding:9px 0;font-size:14px}.muted{font-size:12px;color:#987f66}a{color:#8a5c22} .notice{background:#fff0c6;padding:12px;border-radius:12px;font-size:13px;line-height:1.7}</style></head><body><main class="wrap"><div class="mascot">🐶🍮</div><h1>布丁幸福集點卡 ♡</h1><div class="sub">每個努力的日子，都值得一顆星星。</div><p id="storageStatus" class="notice" role="status" hidden></p><div class="card"><div id="count"></div><div id="dots" class="dots"></div><div id="reward"></div></div><div class="card"><h3>給她一點 ⭐</h3><label for="reason">這次值得鼓勵的事</label><input id="reason" maxlength="100" placeholder="例如：今天完成英文練習！"><div class="row"><button id="add">給她一點 ＋</button><button class="alt" id="undo">撤銷上一點</button></div><p class="muted">資料只保存在這台 iPhone 的此網站 Safari 儲存空間；請定期備份。</p></div><div class="card"><h3>獎勵設定 🎁</h3><label for="goal">集滿幾點</label><input id="goal" type="number" min="1" max="100" value="10"><label for="prize">獎品</label><input id="prize" maxlength="120" placeholder="例如：男友請吃大餐"><button id="save">儲存獎勵</button><p id="msg" class="muted"></p><button id="redeem" class="alt">集滿後兌換並開始新一輪</button></div><div class="card"><h3>幸福紀錄 ♡</h3><div id="history"></div></div><div class="card"><h3>同步給女朋友</h3><p class="notice">按「產生同步檔」，會下載 <b>index.html</b>。請到 GitHub Pages 專案上傳並覆蓋同名檔案。女朋友重新整理固定網址就能看到最新點數。同步檔會公開顯示點數、輪次和獎品。</p><p><label><input id="shareHistory" type="checkbox"> 一併公開最近 30 筆集點與兌換紀錄</label></p><button id="export">產生同步檔 index.html</button><p class="muted">重要：每次給點後建議備份 JSON 至 iCloud Drive。Safari 網站資料可能被清除；不要使用無痕模式。</p><div class="row"><button class="alt" id="backup">備份管理資料</button><button class="alt" id="restoreBtn">還原備份</button></div><input id="restore" type="file" accept="application/json,.json" hidden></div></main><script>
+const KEY = 'pudding-love-card-v1';
+const $ = id => document.getElementById(id);
+const initialData = {goal: 10, prize: '男友請吃一頓浪漫晚餐 🍮', points: 0, history: [], round: 1};
+let data = initialData;
+let storageReadable = true;
+
+function validate(value) {
+  if (!value || !Number.isInteger(value.goal) || value.goal < 1 || value.goal > 100 ||
+      !Number.isInteger(value.points) || value.points < 0 || value.points > value.goal ||
+      !Number.isSafeInteger(value.round) || value.round < 1 || typeof value.prize !== 'string' ||
+      !Array.isArray(value.history) || !value.history.every(entry =>
+        entry && ['point', 'redeem'].includes(entry.type) &&
+        typeof entry.reason === 'string' && typeof entry.time === 'string' &&
+        Number.isSafeInteger(entry.round) && entry.round >= 1 && entry.round <= value.round)) {
+    throw new Error('備份格式不正確');
+  }
+  return value;
+}
+
+function storageMessage(message) {
+  $('storageStatus').textContent = message;
+  $('storageStatus').hidden = !message;
+}
+
+try {
+  const stored = localStorage.getItem(KEY);
+  if (stored !== null) data = validate(JSON.parse(stored));
+} catch {
+  storageReadable = false;
+  storageMessage('無法讀取本機資料。請確認 Safari 的網站儲存可用，或從 JSON 備份還原。');
+}
+
+function commit(next, {restore = false} = {}) {
+  if (!storageReadable && !restore) return false;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next));
+  } catch {
+    storageMessage('本次未能儲存。請檢查 Safari 的網站資料設定與剩餘空間，再試一次。');
+    return false;
+  }
+  data = next;
+  storageReadable = true;
+  storageMessage('');
+  render();
+  return true;
+}
+
+function lastPointIndex() {
+  for (let index = data.history.length - 1; index >= 0; index--) {
+    const entry = data.history[index];
+    if (entry.type === 'point' && entry.round === data.round) return index;
+  }
+  return -1;
+}
+
+function render() {
+  $('count').textContent = storageReadable ? '第 ' + data.round + ' 輪｜' + data.points + ' / ' + data.goal + ' 點' : '無法顯示本機點數';
+  $('dots').replaceChildren(...Array.from({length: storageReadable ? data.goal : 0}, (_, index) => {
+    const dot = document.createElement('div');
+    dot.className = index < data.points ? 'dot on' : 'dot';
+    dot.textContent = index < data.points ? '⭐' : index + 1;
+    return dot;
+  }));
+  $('reward').textContent = storageReadable ? '🎁 集滿獎品：' + data.prize : '';
+  $('goal').value = data.goal;
+  $('prize').value = data.prize;
+  $('msg').textContent = '';
+  $('redeem').disabled = !storageReadable || data.points < data.goal;
+  $('add').disabled = !storageReadable || data.points >= data.goal;
+  $('undo').disabled = !storageReadable || lastPointIndex() < 0;
+  $('save').disabled = $('backup').disabled = $('export').disabled = !storageReadable;
+  $('history').replaceChildren(...data.history.slice().reverse().map(entry => {
+    const item = document.createElement('div');
+    item.className = 'entry';
+    item.textContent = (entry.type === 'point' ? '⭐ ' : '🎁 已兌換：') + entry.reason;
+    const details = document.createElement('div');
+    details.className = 'muted';
+    details.textContent = '第 ' + entry.round + ' 輪・' + entry.time;
+    item.append(details);
+    return item;
+  }));
+  if (storageReadable && !data.history.length) $('history').textContent = '還沒有紀錄';
+}
+render();
+
+$('add').onclick = () => {
+  if (data.points >= data.goal) return;
+  const entry = {type: 'point', reason: $('reason').value.trim() || '今天也很棒！',
+    time: new Date().toLocaleString('zh-TW'), round: data.round};
+  if (commit({...data, points: data.points + 1, history: [...data.history, entry]})) $('reason').value = '';
+};
+$('undo').onclick = () => {
+  const index = lastPointIndex();
+  if (index < 0 || !confirm('確定撤銷上一點？')) return;
+  const history = data.history.slice();
+  history.splice(index, 1);
+  commit({...data, history, points: Math.max(0, data.points - 1)});
+};
+$('save').onclick = () => {
+  const goal = Number($('goal').value);
+  if (!Number.isInteger(goal) || goal < 1 || goal > 100 || goal < data.points) {
+    alert('集點目標需介於 1～100，且不能小於目前點數');
+    return;
+  }
+  if (commit({...data, goal, prize: $('prize').value.trim() || '神秘驚喜'})) {
+    $('msg').textContent = '已儲存在本機';
+  }
+};
+$('redeem').onclick = () => {
+  if (data.points < data.goal || !confirm('確定已兌換獎品，並開始新一輪？')) return;
+  const entry = {type: 'redeem', reason: data.prize, time: new Date().toLocaleString('zh-TW'), round: data.round};
+  commit({...data, round: data.round + 1, points: 0, history: [...data.history, entry]});
+};
+window.addEventListener('storage', event => {
+  if (event.key !== KEY && event.key !== null) return;
+  if (event.newValue === null) {
+    storageReadable = false;
+    storageMessage('本機資料已被移除。請從 JSON 備份還原，或重新開啟頁面開始新卡。');
+  } else {
+    try {
+      data = validate(JSON.parse(event.newValue));
+      storageReadable = true;
+      storageMessage('');
+    } catch {
+      storageReadable = false;
+      storageMessage('本機資料無法讀取。請從 JSON 備份還原。');
+    }
+  }
+  render();
+});
+function download(name,contents,type){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([contents],{type}));a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000)}
+$('backup').onclick = () => {
+  const date = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+  download('pudding-backup-' + date + 'Z.json', JSON.stringify(data, null, 2), 'application/json');
+};
+$('restoreBtn').onclick = () => $('restore').click();
+$('restore').onchange = async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    const backup = validate(JSON.parse(await file.text()));
+    if (confirm('還原會覆蓋目前手機的管理資料，確定嗎？')) commit(backup, {restore: true});
+  } catch (error) {
+    alert('無法還原：' + error.message);
+  } finally {
+    event.target.value = '';
+  }
+};
+$('export').onclick=()=>{const snapshot={goal:data.goal,prize:data.prize,points:data.points,round:data.round,history:$('shareHistory').checked ? data.history.slice(-30) : [],updated:new Date().toLocaleString('zh-TW')};const safe=JSON.stringify(snapshot).replace(/</g,'\\u003c').replace(/>/g,'\\u003e').replace(/&/g,'\\u0026');const html=`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>布丁幸福集點卡 ♡</title><style>body{margin:0;background:#fff7e7;color:#68482f;font-family:system-ui,-apple-system,sans-serif}.wrap{max-width:520px;margin:auto;padding:32px 18px;text-align:center}.card{background:white;border:2px solid #f2dbad;border-radius:25px;padding:24px;box-shadow:0 6px 0 #f8e7c7}.dog{font-size:76px}.dots{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:25px 0}.dot{aspect-ratio:1;display:grid;place-items:center;border-radius:50%;background:#fff0d4;border:2px dashed #e4cba5}.on{background:#ffd35d;border:2px solid #d8a545}.history{text-align:left;font-size:14px;padding:8px;border-bottom:1px solid #f0e4d2}.small{color:#9d8061;font-size:12px}</style></head><body><div class="wrap"><div class="dog">🐶🍮</div><h1>布丁幸福集點卡 ♡</h1><p>每一個小小的進步，都值得被喜歡。</p><div class="card"><h2 id="count"></h2><div id="dots" class="dots"></div><h3 id="prize"></h3><p id="status"></p><div class="small" id="updated"></div></div><section id="sharedHistory" hidden><h3>幸福紀錄 ⭐</h3><div id="history"></div></section><p class="small">這是唯讀集點卡，由男友手動同步更新 ♡</p></div><script>const d=${safe};const e=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));document.getElementById('count').textContent='第 '+d.round+' 輪｜'+d.points+' / '+d.goal+' 點';document.getElementById('dots').innerHTML=Array.from({length:d.goal},(_,i)=>'<div class="dot '+(i<d.points?'on':'')+'">'+(i<d.points?'⭐':i+1)+'</div>').join('');document.getElementById('prize').textContent='🎁 '+d.prize;document.getElementById('status').textContent=d.points>=d.goal?'🎉 集滿啦！可以兌換獎勵！':'再集 '+(d.goal-d.points)+' 點就能換獎品';document.getElementById('updated').textContent='快照產生時間：'+d.updated;document.getElementById('sharedHistory').hidden = d.history.length === 0;document.getElementById('history').innerHTML=d.history.slice().reverse().map(x=>'<div class="history">'+e(x.type==='point'?'⭐ '+x.reason:'🎁 已兌換：'+x.reason)+'<div class="small">'+e(x.time)+'</div></div>').join('')||'還沒有紀錄';<\/script></body></html>`;download('index.html',html,'text/html;charset=utf-8')};
+</script></body></html>
